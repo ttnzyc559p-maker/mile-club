@@ -214,6 +214,10 @@ svg{display:block}
 .mc-splash svg{color:var(--gold-d); animation:pulse2 1.4s ease-in-out infinite; margin:0 auto}
 @keyframes pulse2{0%,100%{opacity:.4}50%{opacity:1}}
 button:focus-visible, input:focus-visible{outline:2px solid var(--gold); outline-offset:2px}
+.mc-conn{display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:4px 9px; border-radius:20px; border:1px solid var(--line); background:var(--mist-2); color:var(--pine-3)}
+.mc-conn.ok{background:#D9F0D6; border-color:#A9DCA6; color:#2E7D32}
+.mc-conn.fail{background:#FBE4DD; border-color:#F3C8BD; color:#B94A2C}
+.mc-conn-dot{width:6px; height:6px; border-radius:50%; background:currentColor; flex-shrink:0}
 @media (prefers-reduced-motion: reduce){*{animation-duration:.001ms!important; transition-duration:.001ms!important}}
 </style>
 </head>
@@ -319,6 +323,8 @@ const Store = {
   members: {},              // id -> {profile:{name,color,emoji}, days:{date:{type,distance,note,ts,kudos:[],comments:[]}}}
   db: null,
   ready: false,
+  cloudStatus: "connecting", // "connecting" | "connected" | "solo"
+  cloudError: "",
 
   async init(){
     this.me = LS.get("mileclub:me", null);
@@ -330,14 +336,24 @@ const Store = {
         this.mode = "cloud";
         this.db.collection("members").onSnapshot(snap=>{
           const m={}; snap.forEach(doc=>{ m[doc.id]=doc.data(); });
-          this.members=m; rerender();
-        }, err=>{ console.warn("Firestore listen failed:",err); });
+          this.members=m;
+          if(this.cloudStatus !== "connected"){ this.cloudStatus="connected"; this.cloudError=""; }
+          rerender();
+        }, err=>{
+          this.cloudStatus="solo";
+          this.cloudError=err.code ? err.code + ": " + (err.message||"") : String(err);
+          this.mode="local"; this._loadLocal(); rerender();
+        });
         if (this.me) await this._ensureProfile();
       } catch(e){
-        console.warn("Firebase unavailable, falling back to solo mode:", e);
+        this.cloudStatus="solo";
+        this.cloudError=e.message||String(e);
         this.mode="local"; this._loadLocal();
       }
-    } else { this.mode="local"; this._loadLocal(); }
+    } else {
+      this.cloudStatus="solo"; this.cloudError="No Firebase config";
+      this.mode="local"; this._loadLocal();
+    }
   },
   _loadLocal(){
     if(this.me){ const days=LS.get("mileclub:days:"+this.me.id,{});
@@ -451,7 +467,7 @@ function render(){
   app.innerHTML=`<div class="mc-shell">
     <header class="mc-header">
       <div class="mc-brand"><span class="mc-brand-ico">${ic("foot",20)}</span><span class="mc-brand-name">the mile club</span></div>
-      <div class="mc-avatar" style="background:${esc(Store.me.color)}">${Store.me.emoji}</div>
+      <div style="display:flex;align-items:center;gap:8px">${renderConnStatus()}<div class="mc-avatar" style="background:${esc(Store.me.color)}">${Store.me.emoji}</div></div>
     </header>
     <main class="mc-main">${body}</main>
     ${renderNav(loggedToday)}
@@ -517,10 +533,18 @@ function renderTrail(streak){
   </section>`;
 }
 
+function renderConnStatus(){
+  const s=Store.cloudStatus;
+  if(s==="connecting") return `<span class="mc-conn"><span class="mc-conn-dot" style="opacity:.4"></span>Connecting…</span>`;
+  if(s==="connected") return `<span class="mc-conn ok"><span class="mc-conn-dot"></span>Cloud</span>`;
+  const reason=Store.cloudError||"unknown";
+  return `<span class="mc-conn fail" title="${esc(reason)}"><span class="mc-conn-dot"></span>Solo — ${esc(reason.length>40?reason.slice(0,40)+"…":reason)}</span>`;
+}
+
 function renderGroup(){
   const entries=feedEntries();
   const banner=Store.mode==="local"
-    ? `<div class="mc-banner">${ic("users",18)}<div>You're in solo mode — only your own miles show here. Add a Firebase config to the file to share with your circle.</div></div>` : "";
+    ? `<div class="mc-banner">${ic("users",18)}<div>Solo mode${Store.cloudError?" — "+esc(Store.cloudError):""} · Only your own miles show here.</div></div>` : "";
   let feed;
   if(entries.length===0) feed=`<p class="mc-empty big">No miles logged yet. The first marker on the trail is yours to plant.</p>`;
   else feed=`<ul class="mc-feed">${entries.map(renderFeedCard).join("")}</ul>`;
