@@ -268,6 +268,14 @@ svg{display:block;flex-shrink:0}
   font-family:'Fraunces',serif; font-style:italic;
   line-height:1.55; font-weight:400;
 }
+.mc-feed-photo{
+  margin:12px -2px 0; border-radius:14px; overflow:hidden;
+  background:var(--mist); line-height:0;
+}
+.mc-feed-photo img{
+  width:100%; max-height:320px; object-fit:cover;
+  display:block; border-radius:14px;
+}
 .mc-feed-actions{display:flex; gap:8px; margin-top:13px}
 .mc-react{
   display:inline-flex; align-items:center; gap:6px;
@@ -625,6 +633,32 @@ svg{display:block;flex-shrink:0}
   outline:2px solid var(--gold); outline-offset:1px; border-color:transparent;
 }
 
+/* ── photo picker (log sheet) ── */
+.mc-photo-area{margin-top:4px}
+.mc-photo-label{
+  display:inline-flex; align-items:center; gap:8px;
+  border:1.5px dashed var(--line); border-radius:14px;
+  padding:13px 16px; cursor:pointer; color:var(--pine-2);
+  font-weight:600; font-size:14px; width:100%;
+  transition:border-color .15s, background .15s;
+}
+.mc-photo-label:hover{border-color:var(--pine-3); background:var(--mist-2)}
+.mc-photo-preview{
+  position:relative; border-radius:14px; overflow:hidden;
+  background:var(--mist); line-height:0;
+}
+.mc-photo-preview img{
+  width:100%; max-height:240px; object-fit:cover;
+  display:block; border-radius:14px;
+}
+.mc-photo-remove{
+  position:absolute; top:8px; right:8px;
+  width:30px; height:30px; border-radius:50%;
+  background:rgba(20,48,42,.55); color:#fff; border:none;
+  display:grid; place-items:center; cursor:pointer;
+  backdrop-filter:blur(4px); font-size:16px; line-height:1;
+}
+
 /* connection status */
 .mc-conn{
   display:inline-flex; align-items:center; gap:5px;
@@ -688,6 +722,7 @@ const ICONS = {
   send:'<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>',
   spark:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>',
   palette:'<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12a10 10 0 0 0 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+  camera:'<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
 };
 const ic = (name, size=20) => P(ICONS[name]).replace('width="24" height="24"', `width="${size}" height="${size}"`);
 
@@ -720,6 +755,26 @@ const badgeIcon = k => k==="sun"?ic("sun",15):k==="flame"?ic("flame",15):k==="mt
 /* ---------- identity options ---------- */
 const COLORS=["#2C8C7F","#E8952A","#D95F3A","#6C7FD6","#8A5BB8","#3E7C45","#C9386A","#3B82C4","#7A6143","#1A7A5E"];
 const EMOJI=["🏃","🚶","🥾","🌅","🐕","🌲","⛰️","☀️","🍃","🏔️","🐾","🌻","🦅","🌊","🌿","🎯"];
+
+/* ---------- photo resize ---------- */
+function resizeImage(file, maxPx=900, quality=0.72){
+  return new Promise(resolve => {
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const scale=Math.min(1, maxPx/Math.max(img.width,img.height));
+        const canvas=document.createElement('canvas');
+        canvas.width=Math.round(img.width*scale);
+        canvas.height=Math.round(img.height*scale);
+        canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+        resolve(canvas.toDataURL('image/jpeg',quality));
+      };
+      img.src=ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 /* ================= data layer ================= */
 const LS = {
@@ -784,16 +839,20 @@ const Store = {
     await ref.set({ profile:{name:this.me.name,color:this.me.color,emoji:this.me.emoji}, updatedAt:Date.now() }, {merge:true});
   },
 
-  async logDay({type,distance,note}){
+  async logDay({type,distance,note,photo}){
     const date=today(); const ts=Date.now();
     if(this.mode==="cloud"){
       const ref=this.db.collection("members").doc(this.me.id);
       const existing=this.myDays()[date];
-      const day={ type, distance, note:note||"", ts, kudos: existing?.kudos||[], comments: existing?.comments||[] };
+      const day={ type, distance, note:note||"", ts,
+        kudos: existing?.kudos||[], comments: existing?.comments||[],
+        ...(photo!=null ? {photo} : existing?.photo ? {photo:existing.photo} : {}) };
       await ref.set({ days:{ [date]: day } }, {merge:true});
     } else {
       const days=this.myDays(); const existing=days[date];
-      days[date]={ type, distance, note:note||"", ts, kudos: existing?.kudos||[], comments: existing?.comments||[] };
+      days[date]={ type, distance, note:note||"", ts,
+        kudos: existing?.kudos||[], comments: existing?.comments||[],
+        ...(photo!=null ? {photo} : existing?.photo ? {photo:existing.photo} : {}) };
       LS.set("mileclub:days:"+this.me.id, days);
       this.members[this.me.id].days=days;
     }
@@ -994,6 +1053,7 @@ function renderFeedCard(e){
       </div>
     </div>
     ${e.note?`<p class="mc-feed-note">"${esc(e.note)}"</p>`:''}
+    ${e.photo?`<div class="mc-feed-photo"><img src="${e.photo}" alt="photo" loading="lazy" /></div>`:''}
     <div class="mc-feed-actions">
       <button class="mc-react ${liked?'on':''}" data-act="kudos" data-key="${key}">${ic("heart",15)} ${kudos.length||''} <span>Cheer</span></button>
       <button class="mc-react" data-act="toggle-comments" data-key="${key}">${ic("msg",15)} ${comments.length||''} <span>Comment</span></button>
@@ -1102,10 +1162,18 @@ function renderOnboard(){
 }
 
 /* ================= overlays ================= */
-let sheet={type:"walk",dist:1};
+let sheet={type:"walk",dist:1,note:"",photo:null};
 function openLog(){
   const ex=Store.myDays()[today()];
-  sheet={ type:ex?.type||"walk", dist:ex?.distance||1, note:ex?.note||"" };
+  sheet={ type:ex?.type||"walk", dist:ex?.distance||1, note:ex?.note||"", photo:ex?.photo||null };
+  const photoHtml = sheet.photo
+    ? `<div class="mc-photo-preview" id="photo-preview">
+        <img src="${sheet.photo}" alt="Today's photo" />
+        <button class="mc-photo-remove" data-act="photo-clear" aria-label="Remove photo">×</button>
+       </div>`
+    : `<label class="mc-photo-label" for="photo-input">
+        ${ic("camera",18)} Add a photo
+       </label>`;
   const ov=document.getElementById("overlay");
   ov.innerHTML=`<div class="mc-overlay" data-act="sheet-bg"><div class="mc-sheet" id="sheet">
     <div class="mc-sheet-grab"></div>
@@ -1123,6 +1191,11 @@ function openLog(){
     <p class="mc-warn" id="warn" style="display:${sheet.dist<1?'block':'none'}">It takes a full mile to keep the streak.</p>
     <label class="mc-field-label">A note (optional)</label>
     <input class="mc-note-input" id="note" maxlength="120" value="${esc(sheet.note||'')}" placeholder="Sunrise loop, took the dog…" />
+    <label class="mc-field-label">Photo (optional)</label>
+    <div class="mc-photo-area" id="photo-area">
+      ${photoHtml}
+      <input type="file" id="photo-input" accept="image/*" style="display:none" data-act="photo-pick" />
+    </div>
     <button class="mc-cta full" data-act="log-save">${ex?'Update mile':'Plant my marker'}</button>
   </div></div>`;
 }
@@ -1200,11 +1273,18 @@ document.addEventListener("click", async (ev)=>{
   if(act==="dist"){ const inp=document.getElementById("dist");
     let v=(parseFloat(inp.value)||0)+(el.dataset.d==="1"?0.25:-0.25); v=Math.max(0,v);
     inp.value=v.toFixed(2).replace(/\.00$/,""); document.getElementById("warn").style.display=v<1?"block":"none"; return; }
+  if(act==="photo-clear"){
+    sheet.photo=null;
+    const area=document.getElementById("photo-area");
+    if(area) area.innerHTML=`<label class="mc-photo-label" for="photo-input">${ic("camera",18)} Add a photo</label>
+      <input type="file" id="photo-input" accept="image/*" style="display:none" data-act="photo-pick" />`;
+    return;
+  }
   if(act==="log-save"){
     const dist=parseFloat(document.getElementById("dist").value)||0;
     const note=document.getElementById("note").value;
     const before=computeStreak(Store.myDays());
-    await Store.logDay({type:sheet.type,distance:dist,note});
+    await Store.logDay({type:sheet.type,distance:dist,note,photo:sheet.photo});
     closeOverlay();
     const after=computeStreak(Store.myDays());
     const hit=MILES.find(m=>m.n===after && before<m.n);
@@ -1257,6 +1337,20 @@ document.addEventListener("keydown",(ev)=>{
 });
 document.addEventListener("change",(ev)=>{
   const el=ev.target.closest("[data-act]"); if(!el) return;
+  if(el.dataset.act==="photo-pick"){
+    const file=el.files && el.files[0]; if(!file) return;
+    const area=document.getElementById("photo-area");
+    if(area){ area.innerHTML=`<div class="mc-photo-preview" id="photo-preview">
+      <img src="" alt="Today's photo" id="photo-img-preview" style="opacity:.5" />
+      <button class="mc-photo-remove" data-act="photo-clear" aria-label="Remove photo">×</button>
+    </div><input type="file" id="photo-input" accept="image/*" style="display:none" data-act="photo-pick" />`; }
+    resizeImage(file).then(dataUrl=>{
+      sheet.photo=dataUrl;
+      const img=document.getElementById("photo-img-preview");
+      if(img){ img.src=dataUrl; img.style.opacity='1'; }
+    });
+    return;
+  }
   if(el.dataset.act==="reminder-time"){ Store.me.reminderTime=el.value; Store.saveMe(); scheduleReminder(); }
   if(el.dataset.act==="ob-color-custom"){
     obSel.color=el.value;
