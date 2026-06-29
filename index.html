@@ -1069,7 +1069,8 @@ function renderYou(days,streak){
     <div class="mc-profile">
       <div class="mc-avatar xl" style="background:${esc(Store.me.color)}">${Store.me.emoji}</div>
       <h2 class="mc-h2">${esc(Store.me.name)}</h2>
-      <div class="mc-profile-stats">
+      <button class="mc-cta ghost" data-act="edit-profile" style="margin-top:0;padding:8px 16px;font-size:13px;border-radius:11px">${ic("user",14)} Edit profile</button>
+      <div class="mc-profile-stats" style="margin-top:14px">
         <div><span class="mc-stat-n">${streak}</span><span class="mc-stat-l">streak</span></div>
         <div><span class="mc-stat-n">${best}</span><span class="mc-stat-l">best</span></div>
         <div><span class="mc-stat-n">${totalDays}</span><span class="mc-stat-l">days</span></div>
@@ -1201,6 +1202,44 @@ function openLog(){
 }
 function closeOverlay(){ document.getElementById("overlay").innerHTML=""; }
 
+function openEditProfile(){
+  const me=Store.me;
+  const customColor=!COLORS.includes(me.color);
+  const customEmoji=!EMOJI.includes(me.emoji);
+  document.getElementById("overlay").innerHTML=`<div class="mc-overlay" data-act="sheet-bg">
+    <div class="mc-sheet" id="sheet">
+      <div class="mc-sheet-grab"></div>
+      <h3 class="mc-sheet-title">Edit profile</h3>
+      <div class="mc-ob-preview" style="padding:12px 0 16px">
+        <div class="mc-avatar xl" id="ep-avatar" style="background:${esc(me.color)}">${me.emoji}</div>
+        <div class="mc-ob-preview-name" id="ep-preview-name">${esc(me.name)}</div>
+      </div>
+      <label class="mc-field-label" style="margin-top:0">Name</label>
+      <input class="mc-note-input" id="ep-name" maxlength="24" value="${esc(me.name)}" autocomplete="off" />
+      <label class="mc-field-label">Color</label>
+      <div class="mc-color-row">
+        ${COLORS.map(c=>`<button class="mc-swatch ${me.color===c&&!customColor?'on':''}" data-act="ep-color" data-c="${c}" style="background:${c}" aria-label="${c}"></button>`).join("")}
+        <div class="mc-color-custom-wrap ${customColor?'on':''}" title="Custom color">
+          <div class="mc-color-swatch-preview" id="ep-custom-color-preview" style="background:${customColor?esc(me.color):'transparent'}"></div>
+          <input type="color" id="ep-color-custom" value="${esc(customColor?me.color:'#E8952A')}" data-act="ep-color-custom" aria-label="Custom color" />
+          ${customColor?'':`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12a10 10 0 0 0 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`}
+        </div>
+      </div>
+      <label class="mc-field-label">Marker</label>
+      <div class="mc-emoji-grid">
+        ${EMOJI.map(e=>`<button class="mc-emoji-btn ${me.emoji===e&&!customEmoji?'on':''}" data-act="ep-emoji" data-e="${e}">${e}</button>`).join("")}
+      </div>
+      <div class="mc-emoji-custom">
+        <span>Or type any emoji →</span>
+        <input id="ep-emoji-input" data-act="ep-emoji-input" maxlength="8"
+          placeholder="✍️" value="${customEmoji?esc(me.emoji):''}"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      </div>
+      <button class="mc-cta full" data-act="ep-save">Save changes</button>
+    </div>
+  </div>`;
+}
+
 function celebrate(m,streak){
   document.getElementById("overlay").innerHTML=`<div class="mc-overlay celebrate" data-act="celebrate-close">
     <div class="mc-celebrate">
@@ -1229,6 +1268,7 @@ function scheduleReminder(){
 
 /* ================= events ================= */
 let obSel={color:COLORS[0],emoji:EMOJI[0]};
+let epSel={color:COLORS[0],emoji:EMOJI[0]};
 
 function updateObPreview(){
   const av=document.getElementById("ob-avatar");
@@ -1238,8 +1278,34 @@ function updateObPreview(){
   if(nm && nameInput){ nm.textContent=nameInput.value.trim()||"Your name"; }
 }
 
+function updateEpPreview(){
+  const av=document.getElementById("ep-avatar");
+  const nm=document.getElementById("ep-preview-name");
+  const nameEl=document.getElementById("ep-name");
+  if(av){ av.style.background=epSel.color; av.textContent=epSel.emoji; }
+  if(nm && nameEl){ nm.textContent=nameEl.value.trim()||Store.me.name; }
+}
+
 document.addEventListener("input", (ev)=>{
   const el=ev.target;
+  if(el.id==="ep-name"){ updateEpPreview(); return; }
+  if(el.dataset.act==="ep-emoji-input"){
+    const raw=el.value;
+    const match=raw.match(/\p{Emoji_Presentation}|\p{Emoji}️/u)||raw.match(/[\u{1F000}-\u{1FFFF}]/u);
+    const chosen=match?match[0]:(raw.trim().slice(0,2)||"");
+    if(chosen){ epSel.emoji=chosen;
+      document.querySelectorAll('#sheet .mc-emoji-btn').forEach(b=>b.classList.remove('on'));
+      updateEpPreview(); }
+    return;
+  }
+  if(el.dataset.act==="ep-color-custom"){
+    epSel.color=el.value;
+    const prev=document.getElementById("ep-custom-color-preview");
+    if(prev) prev.style.background=el.value;
+    document.querySelectorAll('#sheet .mc-swatch').forEach(b=>b.classList.remove('on'));
+    const wrap=el.closest('.mc-color-custom-wrap'); if(wrap) wrap.classList.add('on');
+    updateEpPreview(); return;
+  }
   if(el.id==="ob-name"){ updateObPreview(); return; }
   if(el.dataset.act==="ob-emoji-input"){
     const raw=el.value;
@@ -1264,6 +1330,32 @@ document.addEventListener("click", async (ev)=>{
   const el=ev.target.closest("[data-act]"); if(!el) return;
   const act=el.dataset.act;
 
+  if(act==="edit-profile"){
+    epSel={color:Store.me.color, emoji:Store.me.emoji};
+    openEditProfile(); return;
+  }
+  if(act==="ep-color"){
+    epSel.color=el.dataset.c;
+    document.querySelectorAll('#sheet .mc-swatch').forEach(b=>b.classList.toggle('on',b===el));
+    const wrap=document.querySelector('#sheet .mc-color-custom-wrap'); if(wrap) wrap.classList.remove('on');
+    updateEpPreview(); return;
+  }
+  if(act==="ep-emoji"){
+    epSel.emoji=el.dataset.e;
+    document.querySelectorAll('#sheet .mc-emoji-btn').forEach(b=>b.classList.toggle('on',b===el));
+    const ci=document.getElementById("ep-emoji-input"); if(ci) ci.value="";
+    updateEpPreview(); return;
+  }
+  if(act==="ep-save"){
+    const name=(document.getElementById("ep-name").value||"").trim();
+    if(!name){ document.getElementById("ep-name").focus(); flash("Name can't be empty."); return; }
+    Store.me.name=name; Store.me.color=epSel.color; Store.me.emoji=epSel.emoji;
+    Store.saveMe();
+    if(Store.mode==="cloud") await Store._ensureProfile();
+    closeOverlay(); rerender();
+    flash("Profile updated.");
+    return;
+  }
   if(act==="log-open"){ openLog(); return; }
   if(act==="sheet-bg" && ev.target===el){ closeOverlay(); return; }
   if(act==="celebrate-close"){ closeOverlay(); return; }
@@ -1359,6 +1451,14 @@ document.addEventListener("change",(ev)=>{
     document.querySelectorAll('.mc-swatch').forEach(b=>b.classList.remove('on'));
     const wrap=el.closest('.mc-color-custom-wrap'); if(wrap) wrap.classList.add('on');
     updateObPreview();
+  }
+  if(el.dataset.act==="ep-color-custom"){
+    epSel.color=el.value;
+    const prev=document.getElementById("ep-custom-color-preview");
+    if(prev) prev.style.background=el.value;
+    document.querySelectorAll('#sheet .mc-swatch').forEach(b=>b.classList.remove('on'));
+    const wrap=el.closest('.mc-color-custom-wrap'); if(wrap) wrap.classList.add('on');
+    updateEpPreview();
   }
 });
 
