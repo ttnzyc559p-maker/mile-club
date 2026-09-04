@@ -32,6 +32,19 @@ service cloud.firestore {
       }
     }
 
+    // Group announcement board: any member can post; posts are immutable and
+    // deletable only by their author.
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.byId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 1
+        && request.resource.data.text.size() <= 500;
+      allow delete: if signedIn() && resource.data.byId == request.auth.uid;
+      allow update: if false;
+    }
+
     // Read access for the group-wide reactions listener (collection-group query).
     match /{path=**}/reactions/{reactionId} {
       allow read: if signedIn();

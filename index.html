@@ -224,6 +224,15 @@ svg{display:block;flex-shrink:0}
   padding:0;
 }
 
+/* ── announcements ── */
+.mc-ann-list{display:flex; flex-direction:column; gap:13px; margin-top:14px}
+.mc-ann{display:flex; gap:9px; align-items:flex-start}
+.mc-ann-body{flex:1; min-width:0}
+.mc-ann-meta{display:flex; align-items:baseline; gap:8px}
+.mc-ann-text{font-size:14px; color:var(--pine-2); line-height:1.5; overflow-wrap:anywhere; margin-top:1px}
+.mc-ann-del{background:none; border:none; color:var(--pine-3); cursor:pointer; padding:4px; border-radius:8px; flex-shrink:0}
+.mc-ann-del:hover{background:var(--mist-2); color:var(--clay)}
+
 /* ── empty ── */
 .mc-empty{color:var(--pine-3); font-size:14px; margin:0; line-height:1.55}
 .mc-empty.big{text-align:center; padding:36px 20px 28px; font-size:15px}
@@ -801,6 +810,7 @@ const Store = {
   uid: null,
   members: {},
   reactions: {},   // { memberId: { date: { kudos:[byId], comments:[…] } } } from subcollections
+  announcements: [],   // newest first
   db: null,
   ready: false,
   cloudStatus: "connecting",
@@ -839,6 +849,10 @@ const Store = {
           });
           this.reactions=r; rerender();
         }, ()=>{ /* reactions are additive — the feed still works without them */ });
+        this.db.collection("announcements").orderBy("ts","desc").limit(50).onSnapshot(snap=>{
+          const a=[]; snap.forEach(doc=>a.push({id:doc.id,...doc.data()}));
+          this.announcements=a; rerender();
+        }, ()=>{ /* additive too — the board just stays empty */ });
         if (this.me) await this._ensureProfile();
       } catch(e){
         this.cloudStatus="solo";
@@ -880,6 +894,7 @@ const Store = {
   _loadLocal(){
     if(this.me){ const days=LS.get("mileclub:days:"+this.me.id,{});
       this.members={ [this.me.id]:{ profile:{name:this.me.name,color:this.me.color,emoji:this.me.emoji}, days } }; }
+    this.announcements=LS.get("mileclub:announcements",[]);
   },
   myDays(){ return (this.members[this.me?.id]||{}).days || {}; },
 
@@ -948,6 +963,25 @@ const Store = {
     } else {
       const day=this.members[id].days[date]; day.comments=[...(day.comments||[]),c];
       LS.set("mileclub:days:"+id, this.members[id].days); rerender();
+    }
+  },
+
+  async postAnnouncement(text){
+    const a={ byId:this.me.id, byName:this.me.name, byColor:this.me.color, byEmoji:this.me.emoji, text, ts:Date.now() };
+    if(this.mode==="cloud"){
+      await this.db.collection("announcements").add(a);
+    } else {
+      this.announcements=[{id:"a_"+Math.random().toString(36).slice(2,9), ...a}, ...this.announcements];
+      LS.set("mileclub:announcements", this.announcements); rerender();
+    }
+  },
+
+  async deleteAnnouncement(id){
+    if(this.mode==="cloud"){
+      await this.db.collection("announcements").doc(id).delete();
+    } else {
+      this.announcements=this.announcements.filter(x=>x.id!==id);
+      LS.set("mileclub:announcements", this.announcements); rerender();
     }
   },
 
@@ -1062,6 +1096,7 @@ function renderToday(days,streak,loggedToday){
         ? `<p class="mc-status-note">${t.type==='run'?'Ran':'Walked'} ${t.distance} mi${t.note?` · <em>${esc(t.note)}</em>`:''}</p>`
         : `<button class="mc-cta" data-act="log-open">Log my mile ${ic("chevR",18)}</button>`}
     </section>
+    ${renderAnnouncements()}
     ${renderTrail(streak)}
     <section class="mc-card">
       <div class="mc-card-head"><h3 class="mc-card-title">The group today</h3>
@@ -1069,6 +1104,28 @@ function renderToday(days,streak,loggedToday){
       ${glance}
     </section>
   </div>`;
+}
+
+function renderAnnouncements(){
+  const list=Store.announcements;
+  const rows=list.length===0
+    ? `<p class="mc-empty" style="margin-top:12px">Nothing posted yet — share something with the group.</p>`
+    : `<div class="mc-ann-list">${list.map(a=>`<div class="mc-ann">
+        <span class="mc-dot sm" style="background:${esc(a.byColor||'#999')}">${a.byEmoji||''}</span>
+        <div class="mc-ann-body">
+          <div class="mc-ann-meta"><span class="mc-comment-name">${esc(a.byName||'Someone')}</span><span class="mc-glance-time">${sinceLabel(a.ts)}</span></div>
+          <div class="mc-ann-text">${esc(a.text)}</div>
+        </div>
+        ${a.byId===Store.me.id && a.id ? `<button class="mc-ann-del" data-act="announce-del" data-id="${esc(a.id)}" aria-label="Delete announcement">${ic("x",13)}</button>`:''}
+      </div>`).join("")}</div>`;
+  return `<section class="mc-card">
+    <h3 class="mc-card-title" style="margin-bottom:10px">Announcements</h3>
+    <div class="mc-comment-input" style="margin-top:0">
+      <input data-cmt="announce" maxlength="500" placeholder="Post to the group…" />
+      <button data-act="announce-send" aria-label="Post announcement">${ic("send",15)}</button>
+    </div>
+    ${rows}
+  </section>`;
 }
 
 function renderTrail(streak){
@@ -1564,6 +1621,19 @@ document.addEventListener("click", async (ev)=>{
     return;
   }
 
+  if(act==="announce-send"){
+    const inp=document.querySelector('input[data-cmt="announce"]'); const text=(inp?.value||"").trim();
+    if(!text) return; inp.value="";
+    try{ await Store.postAnnouncement(text); flash("Posted to the group."); }
+    catch(e){ if(inp) inp.value=text; flash("Couldn't post — "+(e.code||e.message||e)); }
+    return;
+  }
+  if(act==="announce-del"){
+    try{ await Store.deleteAnnouncement(el.dataset.id); }
+    catch(e){ flash("Couldn't delete — "+(e.code||e.message||e)); }
+    return;
+  }
+
   if(act==="reminder-toggle"){ Store.me.reminderOn=!Store.me.reminderOn; Store.saveMe();
     if(Store.me.reminderOn && typeof Notification!=="undefined" && Notification.permission==="default"){ try{ await Notification.requestPermission(); }catch{} }
     scheduleReminder(); syncReminderState(); rerender(); return; }
@@ -1589,7 +1659,11 @@ document.addEventListener("click", async (ev)=>{
 
 document.addEventListener("keydown",(ev)=>{
   if(ev.key==="Enter" && ev.target.dataset && ev.target.dataset.cmt){
-    const key=ev.target.dataset.cmt; const btn=document.querySelector(`[data-act="comment-send"][data-key="${key}"]`); if(btn) btn.click();
+    const key=ev.target.dataset.cmt;
+    const btn=key==="announce"
+      ? document.querySelector('[data-act="announce-send"]')
+      : document.querySelector(`[data-act="comment-send"][data-key="${key}"]`);
+    if(btn) btn.click();
   }
 });
 document.addEventListener("change",(ev)=>{
