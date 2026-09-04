@@ -1,12 +1,42 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    // One doc per person, keyed by their Anonymous Auth uid.
     match /members/{memberId} {
-      allow read: if true;
-      allow create: if true;
-      allow update: if true;
-      allow delete: if false;
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == memberId;
+      // Own doc — plus leftover pre-auth docs (client-generated "u_…" ids),
+      // which the app deletes after migrating them onto the uid. Remove the
+      // u_ clause once everyone has opened the new app version.
+      allow delete: if signedIn()
+        && (request.auth.uid == memberId || memberId.matches('u_.*'));
+
+      // Cheers and comments live here so reacting never requires write
+      // access to another person's member doc.
+      match /reactions/{reactionId} {
+        allow create: if signedIn()
+          && request.resource.data.byId == request.auth.uid
+          && request.resource.data.date is string
+          && request.resource.data.kind in ['kudos', 'comment']
+          && (request.resource.data.kind != 'comment'
+              || (request.resource.data.text is string
+                  && request.resource.data.text.size() >= 1
+                  && request.resource.data.text.size() <= 300));
+        // The author can retract their reaction; the entry's owner can clear
+        // reactions on their own board.
+        allow delete: if signedIn()
+          && (resource.data.byId == request.auth.uid || request.auth.uid == memberId);
+        allow update: if false;
+      }
     }
+
+    // Read access for the group-wide reactions listener (collection-group query).
+    match /{path=**}/reactions/{reactionId} {
+      allow read: if signedIn();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

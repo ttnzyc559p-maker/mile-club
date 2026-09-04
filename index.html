@@ -18,7 +18,9 @@
 <!--                                                                   -->
 <!--  This file works on its own. To let your circle see and comment   -->
 <!--  on each other's miles, create a free Firebase project, turn on   -->
-<!--  Firestore, and paste its config into FIREBASE_CONFIG below.      -->
+<!--  Firestore AND Anonymous Authentication (Build → Authentication   -->
+<!--  → Sign-in method → Anonymous), publish firestore.rules, and      -->
+<!--  paste the project config into FIREBASE_CONFIG below.             -->
 <!--  Leave it as null to run in solo mode.                            -->
 <!-- ================================================================= -->
 
@@ -796,7 +798,9 @@ const LS = {
 const Store = {
   mode: "local",
   me: null,
+  uid: null,
   members: {},
+  reactions: {},   // { memberId: { date: { kudos:[byId], comments:[…] } } } from subcollections
   db: null,
   ready: false,
   cloudStatus: "connecting",
@@ -809,7 +813,10 @@ const Store = {
         await loadFirebase();
         firebase.initializeApp(FIREBASE_CONFIG);
         this.db = firebase.firestore();
+        const cred = await firebase.auth().signInAnonymously();
+        this.uid = cred.user.uid;
         this.mode = "cloud";
+        await this._adoptUid();
         this.db.collection("members").onSnapshot(snap=>{
           const m={}; snap.forEach(doc=>{ m[doc.id]=doc.data(); });
           this.members=m;
@@ -820,16 +827,55 @@ const Store = {
           this.cloudError=err.code ? err.code + ": " + (err.message||"") : String(err);
           this.mode="local"; this._loadLocal(); rerender();
         });
+        this.db.collectionGroup("reactions").onSnapshot(snap=>{
+          const r={};
+          snap.forEach(doc=>{
+            const owner=doc.ref.parent.parent.id, d=doc.data();
+            if(!d.date) return;
+            const byOwner=r[owner]=r[owner]||{};
+            const slot=byOwner[d.date]=byOwner[d.date]||{kudos:[],comments:[]};
+            if(d.kind==="kudos") slot.kudos.push(d.byId);
+            else if(d.kind==="comment") slot.comments.push(d);
+          });
+          this.reactions=r; rerender();
+        }, ()=>{ /* reactions are additive — the feed still works without them */ });
         if (this.me) await this._ensureProfile();
       } catch(e){
         this.cloudStatus="solo";
-        this.cloudError=e.message||String(e);
+        this.cloudError=e.code ? e.code + ": " + (e.message||"") : (e.message||String(e));
         this.mode="local"; this._loadLocal();
       }
     } else {
       this.cloudStatus="solo"; this.cloudError="No Firebase config";
       this.mode="local"; this._loadLocal();
     }
+  },
+
+  // Move a pre-auth identity (client-generated "u_…" id) onto the auth uid:
+  // copy the old doc's days into a doc keyed by the uid, then keep trying to
+  // delete the old doc (that delete only succeeds once the new rules are live).
+  async _adoptUid(){
+    if(!this.me || !this.uid) return;
+    const col=this.db.collection("members");
+    try{
+      if(this.me.id!==this.uid){
+        const legacyId=this.me.id;
+        const [oldSnap,newSnap]=await Promise.all([col.doc(legacyId).get(), col.doc(this.uid).get()]);
+        if(oldSnap.exists && !newSnap.exists){
+          await col.doc(this.uid).set({
+            profile:{name:this.me.name,color:this.me.color,emoji:this.me.emoji},
+            days:(oldSnap.data().days)||{}, updatedAt:Date.now(),
+          });
+        }
+        this.me.id=this.uid;
+        if(oldSnap.exists) this.me.legacyId=legacyId;
+        this.saveMe();
+      }
+      if(this.me.legacyId){
+        await col.doc(this.me.legacyId).delete();
+        delete this.me.legacyId; this.saveMe();
+      }
+    }catch{ /* offline, or rules don't allow the legacy delete yet — retried next visit */ }
   },
   _loadLocal(){
     if(this.me){ const days=LS.get("mileclub:days:"+this.me.id,{});
@@ -838,7 +884,7 @@ const Store = {
   myDays(){ return (this.members[this.me?.id]||{}).days || {}; },
 
   async createMe(profile){
-    const id="u_"+Math.random().toString(36).slice(2,9);
+    const id=(this.mode==="cloud" && this.uid) ? this.uid : "u_"+Math.random().toString(36).slice(2,9);
     this.me={ id, ...profile, reminderOn:false, reminderTime:"07:30" };
     LS.set("mileclub:me", this.me);
     if(this.mode==="cloud") await this._ensureProfile();
@@ -869,13 +915,24 @@ const Store = {
     }
   },
 
+  // Cheers and comments live in members/{owner}/reactions so appending one
+  // never needs write access to another person's member doc.
+  reactionsFor(id,date){
+    const day=((this.members[id]||{}).days||{})[date]||{};
+    const sub=(this.reactions[id]||{})[date]||{kudos:[],comments:[]};
+    return {
+      kudos:[...new Set([...(day.kudos||[]), ...sub.kudos])],
+      comments:[...(day.comments||[]), ...sub.comments].sort((a,b)=>(a.ts||0)-(b.ts||0)),
+    };
+  },
+
   async toggleKudos(id,date){
     if(this.mode==="cloud"){
-      const ref=this.db.collection("members").doc(id);
-      const cur=(this.members[id]?.days?.[date]?.kudos)||[];
-      const has=cur.includes(this.me.id);
-      const fv=firebase.firestore.FieldValue;
-      await ref.update({ ["days."+date+".kudos"]: has?fv.arrayRemove(this.me.id):fv.arrayUnion(this.me.id) });
+      const ref=this.db.collection("members").doc(id)
+        .collection("reactions").doc(date+"_kudos_"+this.me.id);
+      const has=(((this.reactions[id]||{})[date]||{}).kudos||[]).includes(this.me.id);
+      if(has) await ref.delete();
+      else await ref.set({ date, kind:"kudos", byId:this.me.id, ts:Date.now() });
     } else {
       const day=this.members[id].days[date]; const cur=day.kudos||[]; const has=cur.includes(this.me.id);
       day.kudos = has?cur.filter(x=>x!==this.me.id):[...cur,this.me.id];
@@ -886,8 +943,8 @@ const Store = {
   async addComment(id,date,text){
     const c={ byId:this.me.id, byName:this.me.name, byColor:this.me.color, byEmoji:this.me.emoji, text, ts:Date.now() };
     if(this.mode==="cloud"){
-      const ref=this.db.collection("members").doc(id);
-      await ref.update({ ["days."+date+".comments"]: firebase.firestore.FieldValue.arrayUnion(c) });
+      await this.db.collection("members").doc(id)
+        .collection("reactions").add({ ...c, date, kind:"comment" });
     } else {
       const day=this.members[id].days[date]; day.comments=[...(day.comments||[]),c];
       LS.set("mileclub:days:"+id, this.members[id].days); rerender();
@@ -899,6 +956,14 @@ const Store = {
       const ref=this.db.collection("members").doc(this.me.id);
       try{ await ref.update({ days:{}, updatedAt:Date.now() }); }
       catch{ await this._ensureProfile(); }
+      try{
+        const docs=(await ref.collection("reactions").get()).docs;
+        while(docs.length){
+          const batch=this.db.batch();
+          docs.splice(0,400).forEach(d=>batch.delete(d.ref));
+          await batch.commit();
+        }
+      }catch{}
     } else {
       LS.set("mileclub:days:"+this.me.id, {});
       if(this.members[this.me.id]) this.members[this.me.id].days={};
@@ -907,13 +972,13 @@ const Store = {
 };
 
 function loadFirebase(){
-  return new Promise((res,rej)=>{
-    const base="https://www.gstatic.com/firebasejs/10.12.0/";
-    const a=document.createElement("script"); a.src=base+"firebase-app-compat.js";
-    a.onload=()=>{ const b=document.createElement("script"); b.src=base+"firebase-firestore-compat.js";
-      b.onload=res; b.onerror=rej; document.head.appendChild(b); };
-    a.onerror=rej; document.head.appendChild(a);
-  });
+  const base="https://www.gstatic.com/firebasejs/10.12.0/";
+  const load=src=>new Promise((res,rej)=>{ const s=document.createElement("script");
+    s.src=base+src; s.onload=res;
+    s.onerror=()=>rej(new Error("couldn't reach Firebase ("+src+")"));
+    document.head.appendChild(s); });
+  return load("firebase-app-compat.js")
+    .then(()=>Promise.all([load("firebase-auth-compat.js"), load("firebase-firestore-compat.js")]));
 }
 
 /* ================= app state ================= */
@@ -1055,7 +1120,7 @@ function renderGroup(){
 
 function renderFeedCard(e){
   const key=e.id+"__"+e.date;
-  const kudos=e.kudos||[], comments=e.comments||[];
+  const {kudos,comments}=Store.reactionsFor(e.id,e.date);
   const liked=kudos.includes(Store.me.id);
   const open=state.openComments[key];
   const commentsHtml=open?`<div class="mc-comments">
@@ -1486,12 +1551,17 @@ document.addEventListener("click", async (ev)=>{
   if(act==="view-you"){ state.view="you"; rerender(); return; }
   if(act==="refresh"){ const i=el.querySelector("svg"); if(i)i.classList.add("mc-spin"); setTimeout(()=>rerender(),400); return; }
 
-  if(act==="kudos"){ const [id,date]=el.dataset.key.split("__"); await Store.toggleKudos(id,date); return; }
+  if(act==="kudos"){ const [id,date]=el.dataset.key.split("__");
+    try{ await Store.toggleKudos(id,date); }
+    catch(e){ flash("Couldn't cheer — "+(e.code||e.message||e)); }
+    return; }
   if(act==="toggle-comments"){ state.openComments[el.dataset.key]=!state.openComments[el.dataset.key]; rerender(); return; }
   if(act==="comment-send"){
     const inp=document.querySelector(`input[data-cmt="${el.dataset.key}"]`); const text=(inp.value||"").trim();
     if(!text) return; const [id,date]=el.dataset.key.split("__"); inp.value="";
-    await Store.addComment(id,date,text); return;
+    try{ await Store.addComment(id,date,text); }
+    catch(e){ inp.value=text; flash("Couldn't comment — "+(e.code||e.message||e)); }
+    return;
   }
 
   if(act==="reminder-toggle"){ Store.me.reminderOn=!Store.me.reminderOn; Store.saveMe();
