@@ -117,6 +117,10 @@ svg{display:block;flex-shrink:0}
 .mc-cta:disabled{opacity:.4; cursor:not-allowed; transform:none; box-shadow:none}
 .mc-cta.ghost{background:transparent; color:var(--pine-2); border:1.5px solid var(--line); box-shadow:none}
 .mc-cta.ghost:hover{background:var(--mist-2); box-shadow:none}
+.mc-cta.danger{background:var(--clay)}
+.mc-cta.danger:hover{background:#B84A28}
+.mc-cta.ghost.danger{background:transparent; color:var(--clay); border-color:#EBC4B5}
+.mc-cta.ghost.danger:hover{background:#FAEAE4}
 
 /* ── trail ── */
 .mc-trail{
@@ -881,6 +885,17 @@ const Store = {
       const day=this.members[id].days[date]; day.comments=[...(day.comments||[]),c];
       LS.set("mileclub:days:"+id, this.members[id].days); rerender();
     }
+  },
+
+  async clearMyData(){
+    if(this.mode==="cloud"){
+      const ref=this.db.collection("members").doc(this.me.id);
+      try{ await ref.update({ days:{}, updatedAt:Date.now() }); }
+      catch{ await this._ensureProfile(); }
+    } else {
+      LS.set("mileclub:days:"+this.me.id, {});
+      if(this.members[this.me.id]) this.members[this.me.id].days={};
+    }
   }
 };
 
@@ -1091,6 +1106,11 @@ function renderYou(days,streak){
         <input type="time" class="mc-time" value="${Store.me.reminderTime}" data-act="reminder-time" /></div>
       <p class="mc-fineprint">Reminders fire while this app is open in your browser. For nudges when closed, add it to your home screen and allow notifications.</p>
     </section>
+    <section class="mc-card">
+      <h3 class="mc-card-title">Housekeeping</h3>
+      <p class="mc-fineprint" style="margin:0 0 14px">Testing things out? You can wipe every day you've logged — distances, notes, photos, and the cheers and comments on them — without touching anyone else's miles.</p>
+      <button class="mc-cta ghost danger" style="margin-top:0" data-act="clear-open">${ic("x",15)} Clear my logged data</button>
+    </section>
   </div>`;
 }
 
@@ -1240,6 +1260,16 @@ function openEditProfile(){
   </div>`;
 }
 
+function openClearConfirm(){
+  document.getElementById("overlay").innerHTML=`<div class="mc-overlay celebrate" data-act="sheet-bg">
+    <div class="mc-celebrate">
+      <h3 class="mc-celebrate-name">Clear your logged data?</h3>
+      <p class="mc-celebrate-sub">Every day you've logged — distances, notes, photos, and the cheers and comments on them — disappears for the whole group. Your profile stays. This can't be undone.</p>
+      <button class="mc-cta danger" style="margin-top:0" data-act="clear-confirm">Yes, clear it all</button>
+      <button class="mc-cta ghost" style="margin-top:10px" data-act="celebrate-close">Keep my miles</button>
+    </div></div>`;
+}
+
 function celebrate(m,streak){
   document.getElementById("overlay").innerHTML=`<div class="mc-overlay celebrate" data-act="celebrate-close">
     <div class="mc-celebrate">
@@ -1383,6 +1413,20 @@ document.addEventListener("click", async (ev)=>{
     if(Store.mode==="local") rerender();
     if(hit) celebrate(hit,after);
     else flash(dist>=1?"Marker planted. Streak's alive.":"Logged — but it takes a full mile to count.");
+    return;
+  }
+
+  if(act==="clear-open"){ openClearConfirm(); return; }
+  if(act==="clear-confirm"){
+    el.disabled=true;
+    try{
+      await Store.clearMyData();
+      closeOverlay(); rerender();
+      flash("All clear — a fresh trail.");
+    }catch(e){
+      el.disabled=false;
+      flash("Couldn't clear: "+(e.message||e));
+    }
     return;
   }
 
