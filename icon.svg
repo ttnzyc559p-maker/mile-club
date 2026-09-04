@@ -1,7 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#14302A"/>
-  <line x1="148" y1="364" x2="364" y2="148" stroke="#3E5E50" stroke-width="22" stroke-linecap="round"/>
-  <circle cx="148" cy="364" r="46" fill="#F0A30E"/>
-  <circle cx="256" cy="256" r="46" fill="#F0A30E"/>
-  <circle cx="364" cy="148" r="54" fill="#F5BC3A"/>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="0%" r="90%">
+      <stop offset="0%" stop-color="#F9F1DC"/>
+      <stop offset="70%" stop-color="#E4EDE1"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <text x="256" y="276" font-size="318" text-anchor="middle" dominant-baseline="central"
+    font-family="'Noto Color Emoji','Apple Color Emoji','Segoe UI Emoji',sans-serif">🏃</text>
 </svg>

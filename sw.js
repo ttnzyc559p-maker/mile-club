@@ -1,7 +1,7 @@
 /* The Mile Club — service worker
  * Offline shell + home-screen reminder nudges.
  * Bump VERSION when shipping a new index.html so installed apps pick it up. */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = "mileclub-" + VERSION;
 const STATE_CACHE = "mileclub-state"; // written by the page, read here; never versioned away
 const ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
