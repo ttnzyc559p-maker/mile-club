@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#E4EDE1" />
 <title>The Mile Club</title>
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Mile Club" />
 
 <!-- ================================================================= -->
 <!--  SHARING SETUP (optional)                                         -->
@@ -1104,7 +1111,7 @@ function renderYou(days,streak){
         <button class="mc-toggle ${Store.me.reminderOn?'on':''}" data-act="reminder-toggle" aria-pressed="${Store.me.reminderOn}"><span class="mc-toggle-knob"></span></button></div>
       <div class="mc-reminder-body">${Store.me.reminderOn?ic("bell",16):ic("bellOff",16)}
         <input type="time" class="mc-time" value="${Store.me.reminderTime}" data-act="reminder-time" /></div>
-      <p class="mc-fineprint">Reminders fire while this app is open in your browser. For nudges when closed, add it to your home screen and allow notifications.</p>
+      <p class="mc-fineprint">Reminders fire while the app is open. On Android, install it to your home screen and allow notifications and nudges can also arrive while it's closed (the browser decides the exact timing). On iPhone, add it to your Home Screen from the Share menu — reminders there fire when the app is open.</p>
     </section>
     <section class="mc-card">
       <h3 class="mc-card-title">Housekeeping</h3>
@@ -1281,6 +1288,51 @@ function celebrate(m,streak){
     </div></div>`;
 }
 
+/* ================= pwa ================= */
+let swReg=null;
+async function setupPWA(){
+  if(!('serviceWorker' in navigator)) return;
+  try{ swReg=await navigator.serviceWorker.register('./sw.js'); }catch{ return; }
+  syncReminderState();
+}
+// Stash reminder settings where the service worker can read them (it has no
+// localStorage), so it can nudge from the background where the platform allows.
+async function syncReminderState(){
+  if(!('caches' in window) || !Store.me) return;
+  try{
+    const c=await caches.open('mileclub-state');
+    const prev=await c.match('./reminder-state');
+    let notifiedDate=null;
+    if(prev){ try{ notifiedDate=(await prev.json()).notifiedDate||null; }catch{} }
+    await c.put('./reminder-state', new Response(JSON.stringify({
+      reminderOn:!!Store.me.reminderOn,
+      reminderTime:Store.me.reminderTime||"07:30",
+      loggedDate: valid(Store.myDays()[today()]) ? today() : null,
+      notifiedDate,
+    })));
+  }catch{}
+  try{
+    if(swReg && 'periodicSync' in swReg){
+      if(Store.me.reminderOn){
+        const perm=await navigator.permissions.query({name:'periodic-background-sync'});
+        if(perm.state==='granted') await swReg.periodicSync.register('mile-reminder',{minInterval:4*60*60*1000});
+      } else {
+        await swReg.periodicSync.unregister('mile-reminder');
+      }
+    }
+  }catch{}
+}
+async function notify(body){
+  if(typeof Notification==="undefined" || Notification.permission!=="granted"){ flash(body); return; }
+  // Android (and installed iOS PWAs) require notifications to go through the
+  // service worker registration; the bare constructor throws there.
+  try{
+    const reg=swReg || await navigator.serviceWorker?.getRegistration();
+    if(reg){ await reg.showNotification("The Mile Club",{body, tag:"mile-reminder", icon:"./icon-192.png"}); return; }
+  }catch{}
+  try{ new Notification("The Mile Club",{body}); }catch{ flash(body); }
+}
+
 /* ================= reminders ================= */
 function scheduleReminder(){
   if(reminderTimer) clearTimeout(reminderTimer);
@@ -1288,10 +1340,7 @@ function scheduleReminder(){
   const [h,mn]=Store.me.reminderTime.split(":").map(Number);
   const now=new Date(), next=new Date(); next.setHours(h,mn,0,0); if(next<=now) next.setDate(next.getDate()+1);
   reminderTimer=setTimeout(()=>{
-    if(valid(Store.myDays()[today()])) return;
-    if(typeof Notification!=="undefined" && Notification.permission==="granted"){
-      try{ new Notification("The Mile Club",{body:"Your mile is waiting. Keep the streak alive."}); }catch{}
-    } else flash("Reminder: your mile is waiting today.");
+    if(!valid(Store.myDays()[today()])) notify("Your mile is waiting. Keep the streak alive.");
     scheduleReminder();
   }, next-now);
 }
@@ -1413,6 +1462,7 @@ document.addEventListener("click", async (ev)=>{
     if(Store.mode==="local") rerender();
     if(hit) celebrate(hit,after);
     else flash(dist>=1?"Marker planted. Streak's alive.":"Logged — but it takes a full mile to count.");
+    syncReminderState();
     return;
   }
 
@@ -1422,6 +1472,7 @@ document.addEventListener("click", async (ev)=>{
     try{
       await Store.clearMyData();
       closeOverlay(); rerender();
+      syncReminderState();
       flash("All clear — a fresh trail.");
     }catch(e){
       el.disabled=false;
@@ -1445,7 +1496,7 @@ document.addEventListener("click", async (ev)=>{
 
   if(act==="reminder-toggle"){ Store.me.reminderOn=!Store.me.reminderOn; Store.saveMe();
     if(Store.me.reminderOn && typeof Notification!=="undefined" && Notification.permission==="default"){ try{ await Notification.requestPermission(); }catch{} }
-    scheduleReminder(); rerender(); return; }
+    scheduleReminder(); syncReminderState(); rerender(); return; }
 
   if(act==="ob-color"){
     obSel.color=el.dataset.c;
@@ -1487,7 +1538,7 @@ document.addEventListener("change",(ev)=>{
     });
     return;
   }
-  if(el.dataset.act==="reminder-time"){ Store.me.reminderTime=el.value; Store.saveMe(); scheduleReminder(); }
+  if(el.dataset.act==="reminder-time"){ Store.me.reminderTime=el.value; Store.saveMe(); scheduleReminder(); syncReminderState(); }
   if(el.dataset.act==="ob-color-custom"){
     obSel.color=el.value;
     const prev=document.getElementById("ob-custom-color-preview");
@@ -1508,10 +1559,12 @@ document.addEventListener("change",(ev)=>{
 
 /* ================= boot ================= */
 (async function(){
+  setupPWA();
   await Store.init();
   Store.ready=true;
   render();
   scheduleReminder();
+  syncReminderState();
 })();
 
 })();
